@@ -101,7 +101,8 @@ jobs:
       - name: Package Windows ZIP
         if: matrix.os == 'windows-latest'
         run: |
-          powershell Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath build/windows/x64/runner/Release/universal-spotdl-windows-portable.zip
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath dist/universal-spotdl-windows-portable.zip -Force
 
       - name: Package macOS ZIP
         if: matrix.os == 'macos-latest'
@@ -115,26 +116,21 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: linux-bundle
-          path: |
-            build/linux/x64/release/bundle/**
-            dist/universal-spotdl-linux-bundle.tar.gz
+          path: dist/universal-spotdl-linux-bundle.tar.gz
 
       - name: Upload Windows Artifact
         if: matrix.os == 'windows-latest'
         uses: actions/upload-artifact@v4
         with:
           name: windows-bundle
-          path: |
-            build/windows/x64/runner/Release/**
+          path: dist/universal-spotdl-windows-portable.zip
 
       - name: Upload macOS Artifact
         if: matrix.os == 'macos-latest'
         uses: actions/upload-artifact@v4
         with:
           name: macos-bundle
-          path: |
-            build/macos/Build/Products/Release/**
-            dist/universal-spotdl-macos.zip
+          path: dist/universal-spotdl-macos.zip
 
   build_android:
     name: Build Android APK
@@ -222,7 +218,7 @@ jobs:
           generate_release_notes: false
           body: ${{ steps.changelog.outputs.notes }}
           files: |
-            release/linux/**
-            release/windows/**
-            release/macos/**
-            release/android/**
+            release/linux/universal-spotdl-linux-bundle.tar.gz
+            release/windows/universal-spotdl-windows-portable.zip
+            release/macos/universal-spotdl-macos.zip
+            release/android/app-release.apk
