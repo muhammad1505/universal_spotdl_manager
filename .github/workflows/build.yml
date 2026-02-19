@@ -1,10 +1,13 @@
 name: CI Matrix Build
 
 on:
+  workflow_dispatch:
   pull_request:
-    branches: ['main']
+    branches:
+      - '**'
   push:
-    branches: ['main']
+    branches:
+      - '**'
     tags:
       - 'v*'
 
