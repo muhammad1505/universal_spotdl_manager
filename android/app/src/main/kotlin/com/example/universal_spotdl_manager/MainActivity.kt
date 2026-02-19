@@ -107,6 +107,71 @@ class MainActivity : FlutterActivity() {
             emitLog("[info] Menjalankan setup otomatis di Termux (background)")
             emitLog("[hint] Pastikan di Termux: allow-external-apps=true pada ~/.termux/termux.properties")
 
+            emitLog("[precheck 1/2] Validasi bridge RUN_COMMAND ke Termux")
+            val bridgeProbe = runTermuxCommand(
+                packageName = termuxPackage,
+                shellCommand = "echo __USM_TERMUX_BRIDGE_OK__",
+                timeoutSeconds = 30
+            )
+            val bridgeOutput = "${bridgeProbe.stdout}\n${bridgeProbe.stderr}"
+            val bridgeMarkerFound = bridgeOutput.contains("__USM_TERMUX_BRIDGE_OK__")
+
+            if (bridgeProbe.stdout.isNotBlank()) {
+                emitLogLines("[stdout]", bridgeProbe.stdout)
+            }
+            if (bridgeProbe.stderr.isNotBlank()) {
+                emitLogLines("[stderr]", bridgeProbe.stderr)
+            }
+
+            if (!bridgeProbe.success && !bridgeMarkerFound) {
+                emitLog("[error] Gagal komunikasi ke Termux. exit=${bridgeProbe.exitCode}, err=${bridgeProbe.errCode}, msg=${bridgeProbe.errMsg}")
+                if (looksLikeExternalAppsBlocked(bridgeProbe)) {
+                    emitAllowExternalAppsHint()
+                }
+                emitDone(false)
+                return
+            }
+
+            emitLog("[precheck 2/2] Validasi allow-external-apps di Termux")
+            val allowExternalAppsCheck = runTermuxCommand(
+                packageName = termuxPackage,
+                shellCommand = """
+                    if [ -f ~/.termux/termux.properties ] && grep -Eiq '^[[:space:]]*allow-external-apps[[:space:]]*=[[:space:]]*true([[:space:]]|$)' ~/.termux/termux.properties; then
+                      echo "__USM_ALLOW_EXTERNAL_APPS__=true"
+                    else
+                      echo "__USM_ALLOW_EXTERNAL_APPS__=false"
+                    fi
+                """.trimIndent(),
+                timeoutSeconds = 30
+            )
+
+            val allowCheckOutput =
+                "${allowExternalAppsCheck.stdout}\n${allowExternalAppsCheck.stderr}".lowercase()
+            val allowExternalAppsEnabled = allowCheckOutput.contains("__usm_allow_external_apps__=true")
+
+            if (allowExternalAppsCheck.stdout.isNotBlank()) {
+                emitLogLines("[stdout]", allowExternalAppsCheck.stdout)
+            }
+            if (allowExternalAppsCheck.stderr.isNotBlank()) {
+                emitLogLines("[stderr]", allowExternalAppsCheck.stderr)
+            }
+
+            if (!allowExternalAppsCheck.success && !allowExternalAppsEnabled) {
+                emitLog("[error] Gagal cek allow-external-apps. exit=${allowExternalAppsCheck.exitCode}, err=${allowExternalAppsCheck.errCode}, msg=${allowExternalAppsCheck.errMsg}")
+                if (looksLikeExternalAppsBlocked(allowExternalAppsCheck)) {
+                    emitAllowExternalAppsHint()
+                }
+                emitDone(false)
+                return
+            }
+
+            if (!allowExternalAppsEnabled) {
+                emitLog("[error] allow-external-apps belum aktif di Termux")
+                emitAllowExternalAppsHint()
+                emitDone(false)
+                return
+            }
+
             val commands = listOf(
                 "pkg update -y",
                 "pkg install -y python ffmpeg",
@@ -135,6 +200,9 @@ class MainActivity : FlutterActivity() {
 
                 if (!result.success) {
                     emitLog("[error] Command gagal. exit=${result.exitCode}, err=${result.errCode}, msg=${result.errMsg}")
+                    if (looksLikeExternalAppsBlocked(result)) {
+                        emitAllowExternalAppsHint()
+                    }
                     emitDone(false)
                     return
                 }
@@ -330,6 +398,24 @@ class MainActivity : FlutterActivity() {
 
     private fun normalizeBundleKey(raw: String): String {
         return raw.lowercase().filter { it.isLetterOrDigit() }
+    }
+
+    private fun looksLikeExternalAppsBlocked(result: TermuxCommandResult): Boolean {
+        val detail = "${result.errMsg}\n${result.stderr}\n${result.stdout}".lowercase()
+        return detail.contains("allow-external-apps") ||
+            detail.contains("external app") ||
+            detail.contains("result bundle kosong") ||
+            detail.contains("timeout waiting result") ||
+            (result.exitCode == -1 && result.errCode == -1)
+    }
+
+    private fun emitAllowExternalAppsHint() {
+        emitLog("[hint] Aktifkan allow-external-apps di Termux:")
+        emitLog("[hint] 1) buka Termux")
+        emitLog("[hint] 2) jalankan: mkdir -p ~/.termux")
+        emitLog("[hint] 3) jalankan: echo 'allow-external-apps=true' >> ~/.termux/termux.properties")
+        emitLog("[hint] 4) jalankan: termux-reload-settings")
+        emitLog("[hint] 5) force close Universal SpotDL lalu coba Repair lagi")
     }
 
     private fun emitLogLines(prefix: String, raw: String) {
