@@ -1,0 +1,28 @@
+Analyzing universal_spotdl_manager...                           
+
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/core/theme.dart:84:50 • deprecated_member_use
+warning • Unused import: 'ui/screens/main_scaffold.dart' • lib/main.dart:4:8 • unused_import
+   info • Don't invoke 'print' in production code • lib/services/environment_service.dart:69:7 • avoid_print
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/ui/screens/home_screen.dart:53:50 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/ui/screens/home_screen.dart:103:72 • deprecated_member_use
+  error • The name 'DownloadList' isn't a class • lib/ui/screens/home_screen.dart:136:32 • creation_with_non_type
+  error • Directives must appear before any declarations • lib/ui/screens/home_screen.dart:147:1 • directive_after_declaration
+   info • The import of 'dart:ui' is unnecessary because all of the used elements are also provided by the import of 'package:flutter/material.dart' • lib/ui/screens/player_screen.dart:6:8 • unnecessary_import
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/ui/screens/player_screen.dart:50:41 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/ui/screens/player_screen.dart:72:47 • deprecated_member_use
+   info • 'activeColor' is deprecated and shouldn't be used. Use activeThumbColor instead. This feature was deprecated after v3.31.0-2.0.pre • lib/ui/screens/settings_screen.dart:78:28 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/ui/screens/settings_screen.dart:143:31 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/ui/screens/settings_screen.dart:158:29 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/ui/screens/startup_screen.dart:99:41 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/ui/widgets/download_list.dart:26:74 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/ui/widgets/download_list.dart:68:78 • deprecated_member_use
+warning • Dead code • lib/ui/widgets/download_list.dart:127:30 • dead_code
+warning • The left operand can't be null, so the right operand is never executed • lib/ui/widgets/download_list.dart:127:33 • dead_null_aware_expression
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/ui/widgets/download_list.dart:169:22 • deprecated_member_use
+warning • Unused import: 'package:universal_spotdl_manager/core/theme.dart' • lib/ui/widgets/glass_container.dart:3:8 • unused_import
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/ui/widgets/glass_container.dart:30:33 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/ui/widgets/glass_container.dart:33:35 • deprecated_member_use
+   info • Don't invoke 'print' in production code • test/services/environment_service_test.dart:16:7 • avoid_print
+   info • Don't invoke 'print' in production code • test/services/environment_service_test.dart:23:7 • avoid_print
+   info • Don't invoke 'print' in production code • test/services/environment_service_test.dart:29:7 • avoid_print
+
