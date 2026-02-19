@@ -194,14 +194,38 @@ class MainActivity : FlutterActivity() {
                     return
                 }
 
-                resultHolder.stdout = findBundleString(bundle, "STDOUT")
-                resultHolder.stderr = findBundleString(bundle, "STDERR")
-                resultHolder.exitCode = findBundleInt(bundle, "EXIT_CODE", -1)
-                resultHolder.errCode = findBundleInt(bundle, "_ERR", -1)
-                resultHolder.errMsg = findBundleString(bundle, "ERRMSG")
+                resultHolder.stdout = findBundleString(bundle, "STDOUT", "RESULT_STDOUT")
+                resultHolder.stderr = findBundleString(bundle, "STDERR", "RESULT_STDERR")
+                resultHolder.exitCode = findBundleInt(
+                    bundle,
+                    -1,
+                    "EXIT_CODE",
+                    "EXITCODE",
+                    "RESULT_EXIT_CODE"
+                )
+                resultHolder.errCode = findBundleInt(
+                    bundle,
+                    -1,
+                    "_ERR",
+                    "ERR",
+                    "ERR_CODE",
+                    "ERROR_CODE",
+                    "RESULT_ERR"
+                )
+                resultHolder.errMsg = findBundleString(
+                    bundle,
+                    "ERRMSG",
+                    "ERR_MSG",
+                    "ERROR_MESSAGE"
+                )
 
                 resultHolder.success = resultHolder.exitCode == 0 &&
                     (resultHolder.errCode == -1 || resultHolder.errCode == 0 || resultHolder.errCode == ActivityResultOk)
+
+                if (!resultHolder.success && resultHolder.errMsg.isBlank()) {
+                    val keys = bundle.keySet().joinToString(",")
+                    resultHolder.errMsg = "Result keys: $keys"
+                }
 
                 latch.countDown()
             }
@@ -217,11 +241,18 @@ class MainActivity : FlutterActivity() {
             }
 
             val intent = Intent().apply {
+                val termuxPrefix = "/data/data/$packageName/files/usr"
+                val termuxHome = "/data/data/$packageName/files/home"
+                val preparedCommand =
+                    "export PREFIX='$termuxPrefix'; " +
+                        "export PATH='$termuxPrefix/bin':\$PATH; " +
+                        shellCommand
+
                 setClassName(packageName, "com.termux.app.RunCommandService")
                 action = "com.termux.RUN_COMMAND"
-                putExtra("com.termux.RUN_COMMAND_PATH", "\$PREFIX/bin/bash")
-                putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", shellCommand))
-                putExtra("com.termux.RUN_COMMAND_WORKDIR", "~/")
+                putExtra("com.termux.RUN_COMMAND_PATH", "$termuxPrefix/bin/bash")
+                putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", preparedCommand))
+                putExtra("com.termux.RUN_COMMAND_WORKDIR", termuxHome)
                 putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
                 putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", pendingIntent)
             }
@@ -265,27 +296,40 @@ class MainActivity : FlutterActivity() {
         return extras
     }
 
-    private fun findBundleString(bundle: Bundle, keyPart: String): String {
+    private fun findBundleString(bundle: Bundle, vararg keyParts: String): String {
+        val normalizedKeyParts = keyParts.map { normalizeBundleKey(it) }
         for (key in bundle.keySet()) {
-            if (key.contains(keyPart, ignoreCase = true)) {
+            val normalized = normalizeBundleKey(key)
+            if (normalizedKeyParts.any { normalized.contains(it) }) {
                 return bundle.getString(key) ?: bundle.get(key)?.toString().orEmpty()
             }
         }
         return ""
     }
 
-    private fun findBundleInt(bundle: Bundle, keyPart: String, defaultValue: Int): Int {
+    private fun findBundleInt(bundle: Bundle, defaultValue: Int, vararg keyParts: String): Int {
+        val normalizedKeyParts = keyParts.map { normalizeBundleKey(it) }
         for (key in bundle.keySet()) {
-            if (key.contains(keyPart, ignoreCase = true)) {
+            val normalized = normalizeBundleKey(key)
+            if (normalizedKeyParts.any { normalized.contains(it) }) {
                 val value = bundle.get(key)
                 when (value) {
                     is Int -> return value
                     is Long -> return value.toInt()
-                    is String -> return value.toIntOrNull() ?: defaultValue
+                    is String -> {
+                        val parsed = value.toIntOrNull()
+                        if (parsed != null) {
+                            return parsed
+                        }
+                    }
                 }
             }
         }
         return defaultValue
+    }
+
+    private fun normalizeBundleKey(raw: String): String {
+        return raw.lowercase().filter { it.isLetterOrDigit() }
     }
 
     private fun emitLogLines(prefix: String, raw: String) {

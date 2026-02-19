@@ -31,12 +31,14 @@ class EnvironmentManager extends AsyncNotifier<EnvironmentHealthReport> {
 
       if (hasTermux) {
         final started = await androidSystem.repairTermuxEnvironment();
-        await ref.read(fileServiceProvider).appendJsonLog('app.jsonl', <String, dynamic>{
-          'level': started ? 'info' : 'error',
-          'event': 'android_termux_repair_started',
-          'started': started,
-          'termux_package': packageName,
-        });
+        await ref
+            .read(fileServiceProvider)
+            .appendJsonLog('app.jsonl', <String, dynamic>{
+              'level': started ? 'info' : 'error',
+              'event': 'android_termux_repair_started',
+              'started': started,
+              'termux_package': packageName,
+            });
       }
     } else if (Platform.isWindows) {
       final hasWinget = await executor.isCommandAvailable('winget');
@@ -58,10 +60,10 @@ class EnvironmentManager extends AsyncNotifier<EnvironmentHealthReport> {
     await ref
         .read(fileServiceProvider)
         .appendJsonLog('app.jsonl', <String, dynamic>{
-      'level': 'info',
-      'event': 'environment_repair_executed',
-      'platform': _platformLabel(),
-    });
+          'level': 'info',
+          'event': 'environment_repair_executed',
+          'platform': _platformLabel(),
+        });
 
     final report = await _checkEnvironment();
     state = AsyncValue.data(report);
@@ -100,7 +102,8 @@ class EnvironmentManager extends AsyncNotifier<EnvironmentHealthReport> {
       );
       // Do not probe `/data/data/com.termux/...` because Android app sandbox
       // blocks cross-app directory access and throws PathAccessException.
-      final hasTermux = installedTermuxPackage != null ||
+      final hasTermux =
+          installedTermuxPackage != null ||
           await _isAvailable('termux-info') ||
           await _isAvailable('pkg') ||
           await _isAvailable('termux-change-repo');
@@ -115,37 +118,29 @@ class EnvironmentManager extends AsyncNotifier<EnvironmentHealthReport> {
         ),
       );
 
-      final python = await _checkVersioned(
-        'Python',
-        <String>['python', 'python3'],
-        required: false,
-        hint:
-            'Check in Termux: python --version (sandbox app cannot always verify).',
-      );
-      final spotdl = await _checkVersioned(
+      final python = await _checkVersioned('Python', <String>[
+        'python',
+        'python3',
+      ], required: false);
+      final spotdl = await _checkVersioned('spotdl', <String>[
         'spotdl',
-        <String>['spotdl'],
-        required: false,
-        hint:
-            'Check in Termux: spotdl --version (sandbox app cannot always verify).',
-      );
-      final ffmpeg = await _checkVersioned(
+      ], required: false);
+      final ffmpeg = await _checkVersioned('ffmpeg', <String>[
         'ffmpeg',
-        <String>['ffmpeg'],
-        required: false,
-        hint:
-            'Check in Termux: ffmpeg -version (sandbox app cannot always verify).',
-      );
+      ], required: false);
 
       components.addAll(<EnvironmentComponent>[python, spotdl, ffmpeg]);
-      androidRuntimeUnverified = hasTermux &&
+      androidRuntimeUnverified =
+          hasTermux &&
           (!python.installed || !spotdl.installed || !ffmpeg.installed);
     } else if (Platform.isWindows) {
       components.add(await _checkVersioned('Python', <String>['python', 'py']));
       components.add(await _checkVersioned('pip', <String>['pip', 'pip3']));
       components.add(await _checkVersioned('spotdl', <String>['spotdl']));
     } else if (Platform.isLinux) {
-      components.add(await _checkVersioned('Python', <String>['python3', 'python']));
+      components.add(
+        await _checkVersioned('Python', <String>['python3', 'python']),
+      );
       components.add(await _checkVersioned('spotdl', <String>['spotdl']));
       components.add(
         await _checkVersioned(
@@ -157,25 +152,33 @@ class EnvironmentManager extends AsyncNotifier<EnvironmentHealthReport> {
       );
     } else if (Platform.isMacOS) {
       components.add(await _checkVersioned('Homebrew', <String>['brew']));
-      components.add(await _checkVersioned('Python', <String>['python3', 'python']));
+      components.add(
+        await _checkVersioned('Python', <String>['python3', 'python']),
+      );
       components.add(await _checkVersioned('spotdl', <String>['spotdl']));
     }
 
-    final missingRequired =
-        components.where((component) => component.required && !component.installed);
+    final missingRequired = components.where(
+      (component) => component.required && !component.installed,
+    );
 
     var level = missingRequired.isEmpty
         ? HealthLevel.healthy
-        : (missingRequired.length >= 2 ? HealthLevel.error : HealthLevel.warning);
+        : (missingRequired.length >= 2
+              ? HealthLevel.error
+              : HealthLevel.warning);
 
     var message = missingRequired.isEmpty
         ? 'Environment HEALTHY'
         : 'Missing: ${missingRequired.map((it) => it.name).join(', ')}';
 
-    if (Platform.isAndroid && androidTermuxDetected && androidRuntimeUnverified) {
-      level = HealthLevel.warning;
+    if (Platform.isAndroid &&
+        androidTermuxDetected &&
+        androidRuntimeUnverified &&
+        missingRequired.isEmpty) {
+      level = HealthLevel.healthy;
       message =
-          'Termux terdeteksi. Jalankan di Termux: pkg update && pkg install -y python ffmpeg && pip install -U spotdl';
+          'Termux terdeteksi. Verifikasi versi Python/ffmpeg/spotdl dibatasi sandbox Android. Gunakan Repair bila diperlukan.';
     }
 
     return EnvironmentHealthReport(
@@ -244,5 +247,5 @@ class EnvironmentManager extends AsyncNotifier<EnvironmentHealthReport> {
 
 final environmentProvider =
     AsyncNotifierProvider<EnvironmentManager, EnvironmentHealthReport>(
-  EnvironmentManager.new,
-);
+      EnvironmentManager.new,
+    );

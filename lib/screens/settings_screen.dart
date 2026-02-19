@@ -1,19 +1,12 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../managers/environment_manager.dart';
 import '../managers/queue_manager.dart';
 import '../services/file_service.dart';
 import '../widgets/environment_status_card.dart';
-import '../widgets/termux_repair_console.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
-  const SettingsScreen({
-    super.key,
-    this.enableRuntimeProviders = true,
-  });
+  const SettingsScreen({super.key, this.enableRuntimeProviders = true});
 
   final bool enableRuntimeProviders;
 
@@ -35,8 +28,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final queueState = widget.enableRuntimeProviders
         ? ref.watch(queueProvider)
         : const QueueState();
-    final queue =
-        widget.enableRuntimeProviders ? ref.read(queueProvider.notifier) : null;
+    final queue = widget.enableRuntimeProviders
+        ? ref.read(queueProvider.notifier)
+        : null;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
@@ -52,7 +46,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ),
             ),
           const SizedBox(height: 16),
-          const Text('Queue Engine', style: TextStyle(fontWeight: FontWeight.bold)),
+          const Text(
+            'Queue Engine',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
           const SizedBox(height: 8),
           Card(
             child: Padding(
@@ -81,8 +78,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                           if (!context.mounted) {
                             return;
                           }
-                          ScaffoldMessenger.of(context)
-                              .showSnackBar(SnackBar(content: Text('Queue exported: $path')));
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Queue exported: $path')),
+                          );
                         },
                         icon: const Icon(Icons.upload_file_outlined),
                         label: const Text('Export Queue JSON'),
@@ -90,12 +88,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       const SizedBox(width: 8),
                       OutlinedButton.icon(
                         onPressed: () async {
-                          final path = await ref.read(fileServiceProvider).exportLogs();
+                          final path = await ref
+                              .read(fileServiceProvider)
+                              .exportLogs();
                           if (!context.mounted) {
                             return;
                           }
-                          ScaffoldMessenger.of(context)
-                              .showSnackBar(SnackBar(content: Text('Logs exported: ${path.path}')));
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Logs exported: ${path.path}'),
+                            ),
+                          );
                         },
                         icon: const Icon(Icons.bug_report_outlined),
                         label: const Text('Export Logs'),
@@ -134,41 +137,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 ],
               ),
             ),
-          ),
-          const SizedBox(height: 16),
-          const Text('Environment', style: TextStyle(fontWeight: FontWeight.bold)),
-          const SizedBox(height: 8),
-          Row(
-            children: <Widget>[
-              FilledButton.icon(
-                onPressed: () {
-                  if (widget.enableRuntimeProviders) {
-                    ref.read(environmentProvider.notifier).refresh();
-                  }
-                },
-                icon: const Icon(Icons.health_and_safety_outlined),
-                label: const Text('Recheck'),
-              ),
-              const SizedBox(width: 8),
-              OutlinedButton.icon(
-                onPressed: () {
-                  if (widget.enableRuntimeProviders) {
-                    if (Platform.isAndroid) {
-                      showModalBottomSheet<void>(
-                        context: context,
-                        isScrollControlled: true,
-                        backgroundColor: Colors.transparent,
-                        builder: (_) => const TermuxRepairConsoleSheet(),
-                      );
-                    } else {
-                      ref.read(environmentProvider.notifier).repairEnvironment();
-                    }
-                  }
-                },
-                icon: const Icon(Icons.build_outlined),
-                label: const Text('Repair Environment'),
-              ),
-            ],
           ),
         ],
       ),
