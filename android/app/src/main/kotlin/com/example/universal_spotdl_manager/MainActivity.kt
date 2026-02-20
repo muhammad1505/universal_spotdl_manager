@@ -92,6 +92,17 @@ class MainActivity : FlutterActivity() {
             }
 
             emitLog("[info] Termux package terdeteksi: $termuxPackage")
+            val termuxVersion = getPackageVersionName(termuxPackage)
+            if (!termuxVersion.isNullOrBlank()) {
+                emitLog("[info] Termux version: $termuxVersion")
+            }
+
+            if (!isVersionAtLeast(termuxVersion, 0, 109)) {
+                emitLog("[error] Versi Termux terlalu lama untuk result callback RUN_COMMAND")
+                emitLog("[hint] Update Termux ke versi >= 0.109 (disarankan dari F-Droid/GitHub resmi)")
+                emitDone(false)
+                return
+            }
 
             val runCommandPermission = "com.termux.permission.RUN_COMMAND"
             val permissionGranted =
@@ -133,6 +144,14 @@ class MainActivity : FlutterActivity() {
                 emitDone(false)
                 return
             }
+
+            if (bridgeAckOnly && bridgeProbe.minimalPayloadOnly) {
+                emitLog("[error] Callback Termux hanya berisi key 'result'; output command tidak tersedia")
+                emitTermuxBootstrapHint(termuxPackage)
+                emitDone(false)
+                return
+            }
+
             if (bridgeAckOnly) {
                 emitLog("[warn] Callback Termux hanya mengembalikan ack result=-1 tanpa stdout/exit detail. Lanjut proses setup.")
             }
@@ -174,47 +193,9 @@ class MainActivity : FlutterActivity() {
 
             if (!allowExternalAppsEnabled) {
                 if (allowCheckAckOnly) {
-                    emitLog("[warn] Tidak bisa baca termux.properties dari callback minimal Termux. Lanjut setup dan validasi dari hasil command utama.")
-                    // Cannot assert allow-external-apps from this Termux callback format.
-                    // Continue and let actual command execution validate runtime behavior.
-                    val commands = listOf(
-                        "pkg update -y",
-                        "pkg install -y python ffmpeg",
-                        "python -m pip install -U pip",
-                        "python -m pip install -U spotdl",
-                        "python --version",
-                        "ffmpeg -version | head -n 1",
-                        "spotdl --version"
-                    )
-
-                    val total = commands.size
-                    for ((index, command) in commands.withIndex()) {
-                        emitLog("[step ${index + 1}/$total] $command")
-                        val result = runTermuxCommand(
-                            packageName = termuxPackage,
-                            shellCommand = command,
-                            timeoutSeconds = if (index < 4) 900 else 120
-                        )
-
-                        if (result.stdout.isNotBlank()) {
-                            emitLogLines("[stdout]", result.stdout)
-                        }
-                        if (result.stderr.isNotBlank()) {
-                            emitLogLines("[stderr]", result.stderr)
-                        }
-
-                        if (!result.success) {
-                            emitLog("[error] Command gagal. exit=${result.exitCode}, err=${result.errCode}, msg=${result.errMsg}")
-                            if (looksLikeExternalAppsBlocked(result)) {
-                                emitAllowExternalAppsHint()
-                            }
-                            emitDone(false)
-                            return
-                        }
-                    }
-
-                    emitLog("[ok] Setup environment Termux selesai")
-                    emitDone(true)
+                    emitLog("[warn] Tidak bisa baca termux.properties dari callback minimal Termux. Coba lanjut ke setup command.")
+                    val setupOk = executeSetupCommands(termuxPackage)
+                    emitDone(setupOk)
                     return
                 }
                 emitLog("[error] allow-external-apps belum aktif di Termux")
@@ -223,44 +204,8 @@ class MainActivity : FlutterActivity() {
                 return
             }
 
-            val commands = listOf(
-                "pkg update -y",
-                "pkg install -y python ffmpeg",
-                "python -m pip install -U pip",
-                "python -m pip install -U spotdl",
-                "python --version",
-                "ffmpeg -version | head -n 1",
-                "spotdl --version"
-            )
-
-            val total = commands.size
-            for ((index, command) in commands.withIndex()) {
-                emitLog("[step ${index + 1}/$total] $command")
-                val result = runTermuxCommand(
-                    packageName = termuxPackage,
-                    shellCommand = command,
-                    timeoutSeconds = if (index < 4) 900 else 120
-                )
-
-                if (result.stdout.isNotBlank()) {
-                    emitLogLines("[stdout]", result.stdout)
-                }
-                if (result.stderr.isNotBlank()) {
-                    emitLogLines("[stderr]", result.stderr)
-                }
-
-                if (!result.success) {
-                    emitLog("[error] Command gagal. exit=${result.exitCode}, err=${result.errCode}, msg=${result.errMsg}")
-                    if (looksLikeExternalAppsBlocked(result)) {
-                        emitAllowExternalAppsHint()
-                    }
-                    emitDone(false)
-                    return
-                }
-            }
-
-            emitLog("[ok] Setup environment Termux selesai")
-            emitDone(true)
+            val setupOk = executeSetupCommands(termuxPackage)
+            emitDone(setupOk)
         } catch (e: Exception) {
             emitLog("[error] Repair crash: ${e.message}")
             emitDone(false)
@@ -377,6 +322,9 @@ class MainActivity : FlutterActivity() {
                     // Some Termux variants return only callback-level RESULT_OK.
                     resultHolder.success = true
                 }
+
+                resultHolder.minimalPayloadOnly = bundle.keySet().size == 1 &&
+                    bundle.keySet().any { normalizeBundleKey(it) == "result" }
 
                 if (!resultHolder.success && resultHolder.errMsg.isBlank()) {
                     val details = bundle.keySet().joinToString(",") { key ->
@@ -547,6 +495,93 @@ class MainActivity : FlutterActivity() {
         emitLog("[hint] 5) force close Universal SpotDL lalu coba Repair lagi")
     }
 
+    private fun emitTermuxBootstrapHint(packageName: String) {
+        emitLog("[hint] Buka Termux minimal sekali sampai muncul prompt shell (bootstrap install)")
+        if (openPackage(packageName)) {
+            emitLog("[hint] Termux dibuka otomatis. Setelah siap, kembali ke app ini dan klik Repair lagi.")
+        } else {
+            emitLog("[hint] Tidak bisa auto-open Termux. Buka manual lalu coba Repair lagi.")
+        }
+        emitLog("[hint] Pastikan folder init Termux sudah ada dan permission 0700:")
+        emitLog("[hint] mkdir -p ~/.termux ~/.termux/tasker")
+        emitLog("[hint] chmod 700 ~/.termux ~/.termux/tasker")
+    }
+
+    private fun executeSetupCommands(packageName: String): Boolean {
+        val commands = listOf(
+            "mkdir -p ~/.termux ~/.termux/tasker && chmod 700 ~/.termux ~/.termux/tasker && (grep -Eq '^[[:space:]]*allow-external-apps[[:space:]]*=' ~/.termux/termux.properties 2>/dev/null && sed -Ei 's/^[[:space:]]*allow-external-apps[[:space:]]*=.*/allow-external-apps=true/' ~/.termux/termux.properties || echo 'allow-external-apps=true' >> ~/.termux/termux.properties) && termux-reload-settings >/dev/null 2>&1 || true",
+            "pkg update -y",
+            "pkg install -y python ffmpeg",
+            "python -m pip install -U pip",
+            "python -m pip install -U spotdl",
+            "python --version",
+            "ffmpeg -version | head -n 1",
+            "spotdl --version"
+        )
+
+        val total = commands.size
+        for ((index, command) in commands.withIndex()) {
+            emitLog("[step ${index + 1}/$total] $command")
+            val result = runTermuxCommand(
+                packageName = packageName,
+                shellCommand = command,
+                timeoutSeconds = if (index < 5) 900 else 120
+            )
+
+            if (result.stdout.isNotBlank()) {
+                emitLogLines("[stdout]", result.stdout)
+            }
+            if (result.stderr.isNotBlank()) {
+                emitLogLines("[stderr]", result.stderr)
+            }
+
+            if (!result.success) {
+                emitLog("[error] Command gagal. exit=${result.exitCode}, err=${result.errCode}, msg=${result.errMsg}")
+                if (looksLikeExternalAppsBlocked(result)) {
+                    emitAllowExternalAppsHint()
+                }
+                return false
+            }
+        }
+
+        emitLog("[ok] Setup environment Termux selesai")
+        return true
+    }
+
+    private fun getPackageVersionName(packageName: String): String? {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                packageManager.getPackageInfo(
+                    packageName,
+                    PackageManager.PackageInfoFlags.of(0)
+                ).versionName
+            } else {
+                @Suppress("DEPRECATION")
+                packageManager.getPackageInfo(packageName, 0).versionName
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun isVersionAtLeast(versionName: String?, minMajor: Int, minMinor: Int): Boolean {
+        if (versionName.isNullOrBlank()) {
+            return true
+        }
+
+        val numbers = Regex("\\d+").findAll(versionName).map { it.value.toInt() }.toList()
+        if (numbers.isEmpty()) {
+            return true
+        }
+
+        val major = numbers.getOrElse(0) { 0 }
+        val minor = numbers.getOrElse(1) { 0 }
+        if (major != minMajor) {
+            return major > minMajor
+        }
+        return minor >= minMinor
+    }
+
     private fun emitLogLines(prefix: String, raw: String) {
         val lines = raw.lines().filter { it.isNotBlank() }
         val bounded = if (lines.size > 20) lines.takeLast(20) else lines
@@ -615,7 +650,8 @@ class MainActivity : FlutterActivity() {
         var errMsg: String,
         var stdout: String,
         var stderr: String,
-        var callbackResultCode: Int? = null
+        var callbackResultCode: Int? = null,
+        var minimalPayloadOnly: Boolean = false
     )
 
     companion object {
