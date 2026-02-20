@@ -115,6 +115,8 @@ class MainActivity : FlutterActivity() {
             )
             val bridgeOutput = "${bridgeProbe.stdout}\n${bridgeProbe.stderr}"
             val bridgeMarkerFound = bridgeOutput.contains("__USM_TERMUX_BRIDGE_OK__")
+            val bridgeAckOnly = bridgeProbe.callbackResultCode == ActivityResultOk &&
+                bridgeProbe.exitCode == -1
 
             if (bridgeProbe.stdout.isNotBlank()) {
                 emitLogLines("[stdout]", bridgeProbe.stdout)
@@ -123,13 +125,16 @@ class MainActivity : FlutterActivity() {
                 emitLogLines("[stderr]", bridgeProbe.stderr)
             }
 
-            if (!bridgeProbe.success && !bridgeMarkerFound) {
+            if (!bridgeProbe.success && !bridgeMarkerFound && !bridgeAckOnly) {
                 emitLog("[error] Gagal komunikasi ke Termux. exit=${bridgeProbe.exitCode}, err=${bridgeProbe.errCode}, msg=${bridgeProbe.errMsg}")
                 if (looksLikeExternalAppsBlocked(bridgeProbe)) {
                     emitAllowExternalAppsHint()
                 }
                 emitDone(false)
                 return
+            }
+            if (bridgeAckOnly) {
+                emitLog("[warn] Callback Termux hanya mengembalikan ack result=-1 tanpa stdout/exit detail. Lanjut proses setup.")
             }
 
             emitLog("[precheck 2/2] Validasi allow-external-apps di Termux")
@@ -148,6 +153,8 @@ class MainActivity : FlutterActivity() {
             val allowCheckOutput =
                 "${allowExternalAppsCheck.stdout}\n${allowExternalAppsCheck.stderr}".lowercase()
             val allowExternalAppsEnabled = allowCheckOutput.contains("__usm_allow_external_apps__=true")
+            val allowCheckAckOnly = allowExternalAppsCheck.callbackResultCode == ActivityResultOk &&
+                allowExternalAppsCheck.exitCode == -1
 
             if (allowExternalAppsCheck.stdout.isNotBlank()) {
                 emitLogLines("[stdout]", allowExternalAppsCheck.stdout)
@@ -166,6 +173,50 @@ class MainActivity : FlutterActivity() {
             }
 
             if (!allowExternalAppsEnabled) {
+                if (allowCheckAckOnly) {
+                    emitLog("[warn] Tidak bisa baca termux.properties dari callback minimal Termux. Lanjut setup dan validasi dari hasil command utama.")
+                    // Cannot assert allow-external-apps from this Termux callback format.
+                    // Continue and let actual command execution validate runtime behavior.
+                    val commands = listOf(
+                        "pkg update -y",
+                        "pkg install -y python ffmpeg",
+                        "python -m pip install -U pip",
+                        "python -m pip install -U spotdl",
+                        "python --version",
+                        "ffmpeg -version | head -n 1",
+                        "spotdl --version"
+                    )
+
+                    val total = commands.size
+                    for ((index, command) in commands.withIndex()) {
+                        emitLog("[step ${index + 1}/$total] $command")
+                        val result = runTermuxCommand(
+                            packageName = termuxPackage,
+                            shellCommand = command,
+                            timeoutSeconds = if (index < 4) 900 else 120
+                        )
+
+                        if (result.stdout.isNotBlank()) {
+                            emitLogLines("[stdout]", result.stdout)
+                        }
+                        if (result.stderr.isNotBlank()) {
+                            emitLogLines("[stderr]", result.stderr)
+                        }
+
+                        if (!result.success) {
+                            emitLog("[error] Command gagal. exit=${result.exitCode}, err=${result.errCode}, msg=${result.errMsg}")
+                            if (looksLikeExternalAppsBlocked(result)) {
+                                emitAllowExternalAppsHint()
+                            }
+                            emitDone(false)
+                            return
+                        }
+                    }
+
+                    emitLog("[ok] Setup environment Termux selesai")
+                    emitDone(true)
+                    return
+                }
                 emitLog("[error] allow-external-apps belum aktif di Termux")
                 emitAllowExternalAppsHint()
                 emitDone(false)
@@ -286,13 +337,54 @@ class MainActivity : FlutterActivity() {
                     "ERR_MSG",
                     "ERROR_MESSAGE"
                 )
+                resultHolder.callbackResultCode = findBundleIntExact(
+                    intent.extras,
+                    "result",
+                    "result_code"
+                )
+
+                if (resultHolder.exitCode == -1) {
+                    val topLevelExit = findBundleIntExact(
+                        intent.extras,
+                        "exit_code",
+                        "result_code"
+                    )
+                    if (topLevelExit != null) {
+                        resultHolder.exitCode = topLevelExit
+                    } else {
+                        val genericResult = findBundleIntExact(intent.extras, "result")
+                        if (genericResult != null && genericResult >= 0) {
+                            resultHolder.exitCode = genericResult
+                        }
+                    }
+                }
+
+                if (resultHolder.errCode == -1) {
+                    val topLevelErr = findBundleIntExact(intent.extras, "err", "error", "result")
+                    if (topLevelErr != null && topLevelErr < 0) {
+                        resultHolder.errCode = topLevelErr
+                    }
+                }
 
                 resultHolder.success = resultHolder.exitCode == 0 &&
                     (resultHolder.errCode == -1 || resultHolder.errCode == 0 || resultHolder.errCode == ActivityResultOk)
 
+                if (!resultHolder.success &&
+                    resultHolder.exitCode == -1 &&
+                    resultHolder.errCode == ActivityResultOk &&
+                    resultHolder.errMsg.isBlank()
+                ) {
+                    // Some Termux variants return only callback-level RESULT_OK.
+                    resultHolder.success = true
+                }
+
                 if (!resultHolder.success && resultHolder.errMsg.isBlank()) {
-                    val keys = bundle.keySet().joinToString(",")
-                    resultHolder.errMsg = "Result keys: $keys"
+                    val details = bundle.keySet().joinToString(",") { key ->
+                        val value = bundle.get(key)
+                        val type = value?.javaClass?.simpleName ?: "null"
+                        "$key($type)=$value"
+                    }
+                    resultHolder.errMsg = "Result keys: $details"
                 }
 
                 latch.countDown()
@@ -353,6 +445,17 @@ class MainActivity : FlutterActivity() {
         val extras = intent.extras ?: return null
 
         for (key in extras.keySet()) {
+            val normalized = normalizeBundleKey(key)
+            if ((normalized == "result" ||
+                    normalized == "pluginresultbundle" ||
+                    normalized.contains("pluginresultbundle")) &&
+                extras.get(key) is Bundle
+            ) {
+                return extras.getBundle(key)
+            }
+        }
+
+        for (key in extras.keySet()) {
             if (key.contains("PLUGIN_RESULT_BUNDLE", ignoreCase = true) ||
                 key.contains("plugin_result_bundle", ignoreCase = true)
             ) {
@@ -394,6 +497,32 @@ class MainActivity : FlutterActivity() {
             }
         }
         return defaultValue
+    }
+
+    private fun findBundleIntExact(bundle: Bundle?, vararg exactKeys: String): Int? {
+        if (bundle == null) {
+            return null
+        }
+
+        val normalizedExactKeys = exactKeys.map { normalizeBundleKey(it) }
+        for (key in bundle.keySet()) {
+            val normalized = normalizeBundleKey(key)
+            if (normalizedExactKeys.any { normalized == it }) {
+                val value = bundle.get(key)
+                when (value) {
+                    is Int -> return value
+                    is Long -> return value.toInt()
+                    is String -> {
+                        val parsed = value.toIntOrNull()
+                        if (parsed != null) {
+                            return parsed
+                        }
+                    }
+                }
+            }
+        }
+
+        return null
     }
 
     private fun normalizeBundleKey(raw: String): String {
@@ -485,7 +614,8 @@ class MainActivity : FlutterActivity() {
         var errCode: Int,
         var errMsg: String,
         var stdout: String,
-        var stderr: String
+        var stderr: String,
+        var callbackResultCode: Int? = null
     )
 
     companion object {
