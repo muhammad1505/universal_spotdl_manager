@@ -77,6 +77,48 @@ class MainActivity : FlutterActivity() {
                         }
                     }
 
+                    "executeTermuxCommand" -> {
+                        val command = call.argument<String>("command")
+                        val timeoutSeconds = call.argument<Int>("timeoutSeconds") ?: 300
+                        if (command.isNullOrBlank()) {
+                            result.error("INVALID_ARG", "command is required", null)
+                            return@setMethodCallHandler
+                        }
+
+                        // Run on background thread to avoid blocking the UI thread
+                        repairExecutor.execute {
+                            val termuxPackage = findInstalledTermuxPackage()
+                            if (termuxPackage == null) {
+                                runOnUiThread {
+                                    result.error("TERMUX_NOT_FOUND", "Termux not installed", null)
+                                }
+                                return@execute
+                            }
+
+                            val cmdResult = runTermuxCommand(
+                                packageName = termuxPackage,
+                                shellCommand = command,
+                                timeoutSeconds = timeoutSeconds.toLong()
+                            )
+
+                            runOnUiThread {
+                                result.success(mapOf(
+                                    "stdout" to cmdResult.stdout,
+                                    "stderr" to cmdResult.stderr,
+                                    "exitCode" to cmdResult.exitCode,
+                                    "errCode" to cmdResult.errCode,
+                                    "errMsg" to cmdResult.errMsg,
+                                    "success" to cmdResult.success
+                                ))
+                            }
+                        }
+                    }
+
+                    "findTermuxPackage" -> {
+                        val pkg = findInstalledTermuxPackage()
+                        result.success(pkg)
+                    }
+
                     else -> result.notImplemented()
                 }
             }
@@ -136,26 +178,39 @@ class MainActivity : FlutterActivity() {
                 emitLogLines("[stderr]", bridgeProbe.stderr)
             }
 
+            emitLog("[debug] bridge: success=${bridgeProbe.success}, exit=${bridgeProbe.exitCode}, err=${bridgeProbe.errCode}, ack=${bridgeAckOnly}, marker=${bridgeMarkerFound}, minimal=${bridgeProbe.minimalPayloadOnly}")
+
+            // Hard fail ONLY if no callback was received at all (timeout/security error)
             if (!bridgeProbe.success && !bridgeMarkerFound && !bridgeAckOnly) {
-                emitLog("[error] Gagal komunikasi ke Termux. exit=${bridgeProbe.exitCode}, err=${bridgeProbe.errCode}, msg=${bridgeProbe.errMsg}")
-                if (looksLikeExternalAppsBlocked(bridgeProbe)) {
-                    emitAllowExternalAppsHint()
+                val errMsg = bridgeProbe.errMsg
+                if (errMsg.contains("Timeout", ignoreCase = true) ||
+                    errMsg.contains("SecurityException", ignoreCase = true)
+                ) {
+                    emitLog("[error] Gagal komunikasi ke Termux: ${bridgeProbe.errMsg}")
+                    if (looksLikeExternalAppsBlocked(bridgeProbe)) {
+                        emitAllowExternalAppsHint()
+                    }
+                    emitDone(false)
+                    return
                 }
-                emitDone(false)
-                return
+                // Got a callback but with unexpected data — log warning and try to proceed
+                emitLog("[warn] Bridge callback tidak standar. exit=${bridgeProbe.exitCode}, err=${bridgeProbe.errCode}, msg=${bridgeProbe.errMsg}")
+                emitLog("[warn] Mencoba lanjut ke setup command...")
             }
 
             if (bridgeAckOnly && bridgeProbe.minimalPayloadOnly) {
-                emitLog("[error] Callback Termux hanya berisi key 'result'; output command tidak tersedia")
-                emitTermuxBootstrapHint(termuxPackage)
-                emitDone(false)
-                return
+                // Termux acknowledged the command but didn't return output.
+                // This is common on some Termux versions or when result bundle is minimal.
+                // Instead of failing, proceed to setup commands.
+                emitLog("[warn] Callback Termux hanya berisi key 'result'. Ini normal pada beberapa versi Termux.")
+                emitLog("[info] Melanjutkan setup tanpa validasi output...")
+            } else if (bridgeAckOnly) {
+                emitLog("[warn] Callback tanpa stdout/exit detail. Lanjut proses setup.")
+            } else if (bridgeMarkerFound) {
+                emitLog("[ok] Bridge RUN_COMMAND ke Termux berhasil")
             }
 
-            if (bridgeAckOnly) {
-                emitLog("[warn] Callback Termux hanya mengembalikan ack result=-1 tanpa stdout/exit detail. Lanjut proses setup.")
-            }
-
+            // Precheck 2/2: try to verify allow-external-apps, but don't block on it
             emitLog("[precheck 2/2] Validasi allow-external-apps di Termux")
             val allowExternalAppsCheck = runTermuxCommand(
                 packageName = termuxPackage,
@@ -172,8 +227,6 @@ class MainActivity : FlutterActivity() {
             val allowCheckOutput =
                 "${allowExternalAppsCheck.stdout}\n${allowExternalAppsCheck.stderr}".lowercase()
             val allowExternalAppsEnabled = allowCheckOutput.contains("__usm_allow_external_apps__=true")
-            val allowCheckAckOnly = allowExternalAppsCheck.callbackResultCode == ActivityResultOk &&
-                allowExternalAppsCheck.exitCode == -1
 
             if (allowExternalAppsCheck.stdout.isNotBlank()) {
                 emitLogLines("[stdout]", allowExternalAppsCheck.stdout)
@@ -182,28 +235,19 @@ class MainActivity : FlutterActivity() {
                 emitLogLines("[stderr]", allowExternalAppsCheck.stderr)
             }
 
-            if (!allowExternalAppsCheck.success && !allowExternalAppsEnabled) {
-                emitLog("[error] Gagal cek allow-external-apps. exit=${allowExternalAppsCheck.exitCode}, err=${allowExternalAppsCheck.errCode}, msg=${allowExternalAppsCheck.errMsg}")
-                if (looksLikeExternalAppsBlocked(allowExternalAppsCheck)) {
-                    emitAllowExternalAppsHint()
-                }
-                emitDone(false)
-                return
+            emitLog("[debug] allow-external-apps: success=${allowExternalAppsCheck.success}, enabled=${allowExternalAppsEnabled}, exit=${allowExternalAppsCheck.exitCode}")
+
+            if (allowExternalAppsEnabled) {
+                emitLog("[ok] allow-external-apps sudah aktif")
+            } else if (allowExternalAppsCheck.success && !allowExternalAppsEnabled) {
+                // Command ran but allow-external-apps is not set — setup will fix it
+                emitLog("[warn] allow-external-apps belum aktif. Setup command akan mengaktifkannya.")
+            } else {
+                // Couldn't check (minimal callback or error) — proceed anyway
+                emitLog("[warn] Tidak bisa verifikasi allow-external-apps dari callback. Lanjut ke setup.")
             }
 
-            if (!allowExternalAppsEnabled) {
-                if (allowCheckAckOnly) {
-                    emitLog("[warn] Tidak bisa baca termux.properties dari callback minimal Termux. Coba lanjut ke setup command.")
-                    val setupOk = executeSetupCommands(termuxPackage)
-                    emitDone(setupOk)
-                    return
-                }
-                emitLog("[error] allow-external-apps belum aktif di Termux")
-                emitAllowExternalAppsHint()
-                emitDone(false)
-                return
-            }
-
+            // Always proceed to setup commands — they will configure everything needed
             val setupOk = executeSetupCommands(termuxPackage)
             emitDone(setupOk)
         } catch (e: Exception) {
@@ -250,6 +294,15 @@ class MainActivity : FlutterActivity() {
                     return
                 }
 
+                // Diagnostic: log all raw extra keys for debugging
+                val rawExtras = intent.extras
+                val rawKeyDump = rawExtras?.keySet()?.joinToString(", ") { key ->
+                    val value = rawExtras.get(key)
+                    val type = value?.javaClass?.simpleName ?: "null"
+                    "$key($type)"
+                } ?: "(no extras)"
+                android.util.Log.d("USM_Termux", "Raw intent extras: $rawKeyDump")
+
                 val bundle = extractPluginResultBundle(intent)
                 if (bundle == null) {
                     resultHolder.success = false
@@ -258,14 +311,23 @@ class MainActivity : FlutterActivity() {
                     return
                 }
 
-                resultHolder.stdout = findBundleString(bundle, "STDOUT", "RESULT_STDOUT")
-                resultHolder.stderr = findBundleString(bundle, "STDERR", "RESULT_STDERR")
+                // Diagnostic: log plugin result bundle keys
+                val bundleKeyDump = bundle.keySet().joinToString(", ") { key ->
+                    val value = bundle.get(key)
+                    val type = value?.javaClass?.simpleName ?: "null"
+                    "$key($type)=$value"
+                }
+                android.util.Log.d("USM_Termux", "Plugin result bundle: $bundleKeyDump")
+
+                resultHolder.stdout = findBundleString(bundle, "STDOUT", "RESULT_STDOUT", "stdout")
+                resultHolder.stderr = findBundleString(bundle, "STDERR", "RESULT_STDERR", "stderr")
                 resultHolder.exitCode = findBundleInt(
                     bundle,
                     -1,
                     "EXIT_CODE",
                     "EXITCODE",
-                    "RESULT_EXIT_CODE"
+                    "RESULT_EXIT_CODE",
+                    "exit_code"
                 )
                 resultHolder.errCode = findBundleInt(
                     bundle,
@@ -274,13 +336,15 @@ class MainActivity : FlutterActivity() {
                     "ERR",
                     "ERR_CODE",
                     "ERROR_CODE",
-                    "RESULT_ERR"
+                    "RESULT_ERR",
+                    "err"
                 )
                 resultHolder.errMsg = findBundleString(
                     bundle,
                     "ERRMSG",
                     "ERR_MSG",
-                    "ERROR_MESSAGE"
+                    "ERROR_MESSAGE",
+                    "errmsg"
                 )
                 resultHolder.callbackResultCode = findBundleIntExact(
                     intent.extras,
@@ -305,7 +369,7 @@ class MainActivity : FlutterActivity() {
                 }
 
                 if (resultHolder.errCode == -1) {
-                    val topLevelErr = findBundleIntExact(intent.extras, "err", "error", "result")
+                    val topLevelErr = findBundleIntExact(intent.extras, "err", "error")
                     if (topLevelErr != null && topLevelErr < 0) {
                         resultHolder.errCode = topLevelErr
                     }
@@ -314,17 +378,21 @@ class MainActivity : FlutterActivity() {
                 resultHolder.success = resultHolder.exitCode == 0 &&
                     (resultHolder.errCode == -1 || resultHolder.errCode == 0 || resultHolder.errCode == ActivityResultOk)
 
+                // Rescue: some Termux variants return only callback-level RESULT_OK
+                // without populating stdout/exit_code in the bundle.
                 if (!resultHolder.success &&
                     resultHolder.exitCode == -1 &&
-                    resultHolder.errCode == ActivityResultOk &&
+                    (resultHolder.errCode == ActivityResultOk || resultHolder.errCode == -1) &&
                     resultHolder.errMsg.isBlank()
                 ) {
-                    // Some Termux variants return only callback-level RESULT_OK.
                     resultHolder.success = true
                 }
 
-                resultHolder.minimalPayloadOnly = bundle.keySet().size == 1 &&
-                    bundle.keySet().any { normalizeBundleKey(it) == "result" }
+                resultHolder.minimalPayloadOnly = bundle.keySet().size <= 1 &&
+                    bundle.keySet().all {
+                        val n = normalizeBundleKey(it)
+                        n == "result" || n == "resultcode"
+                    }
 
                 if (!resultHolder.success && resultHolder.errMsg.isBlank()) {
                     val details = bundle.keySet().joinToString(",") { key ->
@@ -342,7 +410,11 @@ class MainActivity : FlutterActivity() {
         try {
             val filter = IntentFilter(actionResult)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                // RECEIVER_EXPORTED is required because Termux (external app)
+                // delivers the command result via this broadcast receiver.
+                // Security: the action string is unique per execution (timestamp+counter)
+                // so other apps cannot guess/spoof the callback.
+                registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
             } else {
                 @Suppress("DEPRECATION")
                 registerReceiver(receiver, filter)
@@ -417,19 +489,54 @@ class MainActivity : FlutterActivity() {
 
     private fun findBundleString(bundle: Bundle, vararg keyParts: String): String {
         val normalizedKeyParts = keyParts.map { normalizeBundleKey(it) }
+
+        // Pass 1: exact match (normalized key == normalized keyPart)
         for (key in bundle.keySet()) {
             val normalized = normalizeBundleKey(key)
+            if (normalizedKeyParts.any { normalized == it }) {
+                val value = bundle.get(key)
+                if (value is String) return value
+                // Skip non-String values for exact match to avoid picking up _length Int keys
+            }
+        }
+
+        // Pass 2: contains match, but skip keys with length/size/count/original
+        val excludePatterns = listOf("length", "size", "count", "original")
+        for (key in bundle.keySet()) {
+            val normalized = normalizeBundleKey(key)
+            if (excludePatterns.any { normalized.contains(it) }) continue
             if (normalizedKeyParts.any { normalized.contains(it) }) {
                 return bundle.getString(key) ?: bundle.get(key)?.toString().orEmpty()
             }
         }
+
         return ""
     }
 
     private fun findBundleInt(bundle: Bundle, defaultValue: Int, vararg keyParts: String): Int {
         val normalizedKeyParts = keyParts.map { normalizeBundleKey(it) }
+
+        // Pass 1: exact match (normalized key == normalized keyPart)
         for (key in bundle.keySet()) {
             val normalized = normalizeBundleKey(key)
+            if (normalizedKeyParts.any { normalized == it }) {
+                val value = bundle.get(key)
+                when (value) {
+                    is Int -> return value
+                    is Long -> return value.toInt()
+                    is String -> {
+                        val parsed = value.toIntOrNull()
+                        if (parsed != null) return parsed
+                    }
+                }
+            }
+        }
+
+        // Pass 2: contains match, but skip keys with length/size/count/original
+        val excludePatterns = listOf("length", "size", "count", "original")
+        for (key in bundle.keySet()) {
+            val normalized = normalizeBundleKey(key)
+            if (excludePatterns.any { normalized.contains(it) }) continue
             if (normalizedKeyParts.any { normalized.contains(it) }) {
                 val value = bundle.get(key)
                 when (value) {
@@ -437,13 +544,12 @@ class MainActivity : FlutterActivity() {
                     is Long -> return value.toInt()
                     is String -> {
                         val parsed = value.toIntOrNull()
-                        if (parsed != null) {
-                            return parsed
-                        }
+                        if (parsed != null) return parsed
                     }
                 }
             }
         }
+
         return defaultValue
     }
 
@@ -479,11 +585,19 @@ class MainActivity : FlutterActivity() {
 
     private fun looksLikeExternalAppsBlocked(result: TermuxCommandResult): Boolean {
         val detail = "${result.errMsg}\n${result.stderr}\n${result.stdout}".lowercase()
-        return detail.contains("allow-external-apps") ||
+        // Check explicit mentions of allow-external-apps
+        if (detail.contains("allow-external-apps") ||
             detail.contains("external app") ||
-            detail.contains("result bundle kosong") ||
-            detail.contains("timeout waiting result") ||
-            (result.exitCode == -1 && result.errCode == -1)
+            detail.contains("result bundle kosong")
+        ) {
+            return true
+        }
+        // Minimal payload with default error values strongly suggests
+        // allow-external-apps is not enabled.
+        if (result.exitCode == -1 && result.errCode == -1 && result.minimalPayloadOnly) {
+            return true
+        }
+        return false
     }
 
     private fun emitAllowExternalAppsHint() {
@@ -508,24 +622,29 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun executeSetupCommands(packageName: String): Boolean {
+        // Pair<command, timeoutSeconds>
+        // pip install needs very long timeout — Rust compilation on ARM can take 30-60+ min
         val commands = listOf(
-            "mkdir -p ~/.termux ~/.termux/tasker && chmod 700 ~/.termux ~/.termux/tasker && (grep -Eq '^[[:space:]]*allow-external-apps[[:space:]]*=' ~/.termux/termux.properties 2>/dev/null && sed -Ei 's/^[[:space:]]*allow-external-apps[[:space:]]*=.*/allow-external-apps=true/' ~/.termux/termux.properties || echo 'allow-external-apps=true' >> ~/.termux/termux.properties) && termux-reload-settings >/dev/null 2>&1 || true",
-            "pkg update -y",
-            "pkg install -y python ffmpeg",
-            "python -m pip install -U pip",
-            "python -m pip install -U spotdl",
-            "python --version",
-            "ffmpeg -version | head -n 1",
-            "spotdl --version"
+            Pair("mkdir -p ~/.termux ~/.termux/tasker && chmod 700 ~/.termux ~/.termux/tasker && (grep -Eq '^[[:space:]]*allow-external-apps[[:space:]]*=' ~/.termux/termux.properties 2>/dev/null && sed -Ei 's/^[[:space:]]*allow-external-apps[[:space:]]*=.*/allow-external-apps=true/' ~/.termux/termux.properties || echo 'allow-external-apps=true' >> ~/.termux/termux.properties) && termux-reload-settings >/dev/null 2>&1 || true", 120L),
+            Pair("pkg update -y", 900L),
+            Pair("pkg install -y python ffmpeg rust binutils", 900L),
+            Pair("pip install --upgrade --no-cache-dir spotdl", 3600L),
+            Pair("python --version", 30L),
+            Pair("ffmpeg -version | head -n 1", 30L),
+            Pair("spotdl --version", 30L)
         )
 
+        // Steps 0-3 are install steps (critical), 4-6 are verification steps (non-critical)
+        val installStepCount = 4
+
         val total = commands.size
-        for ((index, command) in commands.withIndex()) {
+        for ((index, entry) in commands.withIndex()) {
+            val (command, timeout) = entry
             emitLog("[step ${index + 1}/$total] $command")
             val result = runTermuxCommand(
                 packageName = packageName,
                 shellCommand = command,
-                timeoutSeconds = if (index < 5) 900 else 120
+                timeoutSeconds = timeout
             )
 
             if (result.stdout.isNotBlank()) {
@@ -535,12 +654,33 @@ class MainActivity : FlutterActivity() {
                 emitLogLines("[stderr]", result.stderr)
             }
 
+            emitLog("[debug] step ${index + 1}: success=${result.success}, exit=${result.exitCode}, err=${result.errCode}")
+
             if (!result.success) {
-                emitLog("[error] Command gagal. exit=${result.exitCode}, err=${result.errCode}, msg=${result.errMsg}")
-                if (looksLikeExternalAppsBlocked(result)) {
-                    emitAllowExternalAppsHint()
+                val errMsg = result.errMsg
+                // Hard fail on timeout or security errors
+                if (errMsg.contains("Timeout", ignoreCase = true) ||
+                    errMsg.contains("SecurityException", ignoreCase = true)
+                ) {
+                    emitLog("[error] Command gagal: ${result.errMsg}")
+                    if (looksLikeExternalAppsBlocked(result)) {
+                        emitAllowExternalAppsHint()
+                    }
+                    return false
                 }
-                return false
+
+                if (index < installStepCount) {
+                    // Install step failed with real exit code
+                    if (result.exitCode > 0) {
+                        emitLog("[error] Install step gagal (exit=${result.exitCode}). Cek stderr di atas.")
+                        return false
+                    }
+                    // Exit code unknown (-1) but callback received — try to continue
+                    emitLog("[warn] Callback tidak lengkap, tapi command mungkin berhasil. Lanjut...")
+                } else {
+                    // Verification step — just warn, don't abort
+                    emitLog("[warn] Verifikasi '${command.split(" ").first()}' gagal (exit=${result.exitCode}). Mungkin belum terinstall.")
+                }
             }
         }
 

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/theme.dart';
@@ -18,6 +19,7 @@ class TermuxRepairConsoleSheet extends ConsumerStatefulWidget {
 class _TermuxRepairConsoleSheetState
     extends ConsumerState<TermuxRepairConsoleSheet> {
   final List<String> _logs = <String>[];
+  final ScrollController _scrollController = ScrollController();
   StreamSubscription<String>? _subscription;
   bool _running = true;
   bool _success = false;
@@ -40,6 +42,7 @@ class _TermuxRepairConsoleSheetState
         setState(() {
           _logs.add(line);
         });
+        _scrollToBottom();
       },
     );
 
@@ -58,8 +61,32 @@ class _TermuxRepairConsoleSheetState
     });
   }
 
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 150),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  void _copyLogs() {
+    if (_logs.isEmpty) return;
+    Clipboard.setData(ClipboardData(text: _logs.join('\n')));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Log disalin ke clipboard'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
   @override
   void dispose() {
+    _scrollController.dispose();
     _subscription?.cancel();
     super.dispose();
   }
@@ -108,18 +135,26 @@ class _TermuxRepairConsoleSheetState
                           style: TextStyle(fontFamily: 'monospace', color: Colors.white70),
                         ),
                       )
-                    : ListView.builder(
-                        itemCount: _logs.length,
-                        itemBuilder: (context, index) {
-                          return Text(
-                            _logs[index],
-                            style: const TextStyle(
-                              fontFamily: 'monospace',
-                              fontSize: 12,
-                              color: Colors.white,
-                            ),
-                          );
-                        },
+                    : Scrollbar(
+                        controller: _scrollController,
+                        thumbVisibility: true,
+                        thickness: 4,
+                        radius: const Radius.circular(2),
+                        child: ListView.builder(
+                          controller: _scrollController,
+                          itemCount: _logs.length,
+                          padding: const EdgeInsets.only(right: 8),
+                          itemBuilder: (context, index) {
+                            return Text(
+                              _logs[index],
+                              style: const TextStyle(
+                                fontFamily: 'monospace',
+                                fontSize: 12,
+                                color: Colors.white,
+                              ),
+                            );
+                          },
+                        ),
                       ),
               ),
             ),
@@ -128,6 +163,14 @@ class _TermuxRepairConsoleSheetState
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               child: Row(
                 children: <Widget>[
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _logs.isEmpty ? null : _copyLogs,
+                      icon: const Icon(Icons.copy, size: 16),
+                      label: const Text('Copy'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
                   Expanded(
                     child: OutlinedButton(
                       onPressed: _running

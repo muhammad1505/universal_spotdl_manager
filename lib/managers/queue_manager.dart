@@ -51,6 +51,18 @@ class QueueManager extends Notifier<QueueState> {
   final Map<String, DateTime> _startTimes = <String, DateTime>{};
   bool _isProcessing = false;
 
+  // Download log stream — Home console subscribes to this
+  final StreamController<String> _downloadLogController =
+      StreamController<String>.broadcast();
+
+  Stream<String> get downloadLogStream => _downloadLogController.stream;
+
+  void _emitDownloadLog(String line) {
+    if (!_downloadLogController.isClosed) {
+      _downloadLogController.add(line);
+    }
+  }
+
   @override
   QueueState build() {
     ref.onDispose(_disposeRuntime);
@@ -342,6 +354,9 @@ class QueueManager extends Notifier<QueueState> {
     final plugin = ref.read(pluginRegistryProvider).resolve(task.url);
     final command = plugin.buildDownloadCommand(task.url, outputTemplate);
 
+    _emitDownloadLog('[download] ▶ ${task.displayTitle}');
+    _emitDownloadLog('[cmd] $command');
+
     var sawFailure = false;
     var sawSuccess = false;
     var gotExitCode = false;
@@ -358,6 +373,7 @@ class QueueManager extends Notifier<QueueState> {
         if (line.startsWith('__EXIT_CODE__:')) {
           gotExitCode = true;
           final exitCode = int.tryParse(line.split(':').last) ?? 1;
+          _emitDownloadLog('[exit] ${task.displayTitle} → code=$exitCode');
           await _finishTask(
             task.id,
             exitCode: exitCode,
@@ -366,6 +382,9 @@ class QueueManager extends Notifier<QueueState> {
           );
           return;
         }
+
+        // Emit to console
+        _emitDownloadLog(line);
 
         sawFailure = sawFailure || SpotDLParser.isFailure(line);
         sawSuccess = sawSuccess || SpotDLParser.isSuccess(line);
@@ -405,6 +424,7 @@ class QueueManager extends Notifier<QueueState> {
         );
       },
       onError: (Object error) async {
+        _emitDownloadLog('[error] ${task.displayTitle}: $error');
         await _finishTask(
           task.id,
           exitCode: 1,
@@ -484,6 +504,7 @@ class QueueManager extends Notifier<QueueState> {
           );
 
       _replaceTask(completed);
+      _emitDownloadLog('[ok] ✓ ${current.displayTitle} selesai (${elapsed}ms)');
 
       await _log('task_completed', <String, dynamic>{
         'task_id': taskId,
@@ -491,6 +512,7 @@ class QueueManager extends Notifier<QueueState> {
         'retries': current.retries,
       });
     } else {
+      _emitDownloadLog('[error] ✗ ${current.displayTitle} gagal: ${error ?? 'exit=$exitCode'}');
       await _handleFailure(current, error ?? 'Exit code $exitCode');
     }
 
@@ -634,6 +656,7 @@ class QueueManager extends Notifier<QueueState> {
       subscription.cancel();
     }
     _subscriptions.clear();
+    _downloadLogController.close();
   }
 }
 

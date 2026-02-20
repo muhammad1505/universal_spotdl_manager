@@ -162,8 +162,8 @@ class DatabaseService {
     await db.update(
       'tasks',
       <String, Object?>{
-        'status': TaskStatus.waiting.index,
-        'output_message': 'Recovered after app restart',
+        'status': TaskStatus.paused.index,
+        'output_message': 'Paused — recovered after app restart',
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       },
       where: 'status = ?',
